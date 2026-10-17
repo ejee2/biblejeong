@@ -70,11 +70,16 @@ export function getChapter(book, chapter) {
   };
 }
 
+export function getBookChapters(id) {
+  const book = getBook(id);
+  if (!book) throw new TypeError('성경의 책을 확인해 주세요.');
+  return Array.from({ length: book.chapters }, (_, index) => getChapter(book.id, index + 1));
+}
+
 export function getVerse(location) {
   const normalized = normalizeLocation(location);
   if (normalized.verse === null) return null;
-  if (normalized.book !== '1th' || normalized.chapter !== 5) return null;
-  const verse = excerpt.find((item) => item.verse === normalized.verse);
+  const verse = getChapter(normalized.book, normalized.chapter).verses.find((item) => item.verse === normalized.verse);
   return verse ? { ...normalized, text: verse.text } : null;
 }
 
@@ -123,8 +128,9 @@ function reference(chapter, from, to = from) {
 
 export function getContext(location) {
   const verse = getVerse(location);
-  if (!verse) return null;
+  if (!verse || verse.book !== '1th' || verse.chapter !== 5) return null;
   const section = contextSections[verse.verse];
+  if (!section) return null;
   const first = reference(1, 1);
   const selected = reference(5, verse.verse);
   const before = reference(5, ...section.beforeRange);
