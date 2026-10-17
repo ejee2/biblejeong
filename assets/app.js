@@ -1,7 +1,9 @@
 import { BOOKS, DEFAULT_LOCATION, getBook, getBookChapters, getChapter, getVerse, getContext, officialBibleUrl, parseReadingLocation, readingUrl, compareLocations } from './bible-data.js';
 import { createVerseStore, STORAGE_KEY } from './store.js';
-import { adjacentBook, verseElementId } from './navigation.js';
+import { adjacentBook, verseElementId, verseForRange } from './navigation.js';
 import { bookChaptersMarkup } from './book-reader.js';
+import { createBibleLoader } from './bible-api.js';
+import { BIBLE_API_BASE_URL } from './api-config.js';
 
 const main = document.querySelector('#main');
 const isMyPage = document.body.dataset.page === 'mypage';
@@ -24,11 +26,46 @@ let editor = null;
 let sort = 'recent';
 let filter = 'all';
 let toastTimer;
+let chapterObserver;
+let dataRenderQueued = false;
 let settings = { size:19, line:1.8, theme:'light' };
 
 try { if (!isMyPage) location = parseReadingLocation(window.location.search); } catch (error) { addressError = error; }
 activeVerse = location.verse;
 mobileOpen = !isMyPage && new URLSearchParams(window.location.search).has('verse') && !!getVerse(location);
+let awaitingDeepLink = !isMyPage && !addressError && location.verse !== null && !getVerse(location);
+const bibleLoader = BIBLE_API_BASE_URL ? createBibleLoader({baseUrl:BIBLE_API_BASE_URL,onChange:handleBibleChange}) : null;
+function requestChapter(book,chapter) { bibleLoader?.load(book,chapter).catch(()=>{}); }
+function handleBibleChange(book) {
+  if (isMyPage) { updateSavedTexts(); return; }
+  if (book !== location.book || dataRenderQueued) return;
+  dataRenderQueued = true;
+  requestAnimationFrame(()=>{
+    dataRenderQueued = false;
+    if (addressError) return;
+    let currentVerse;
+    try { currentVerse=getVerse(location); }
+    catch (error) { addressError=error;awaitingDeepLink=false;mobileOpen=false;renderReader();return; }
+    if (awaitingDeepLink && currentVerse) {
+      awaitingDeepLink = false;
+      mobileOpen = window.matchMedia('(max-width:1023px)').matches;
+      renderReader(); scrollToReadingLocation();
+      if (mobileOpen) document.querySelector('#context-title')?.focus({preventScroll:true});
+      else focusSelectedVerse();
+    } else renderReader({preserveContext:true});
+  });
+}
+function observeChapters() {
+  chapterObserver?.disconnect();
+  if (!bibleLoader || addressError) return;
+  chapterObserver = new IntersectionObserver(entries=>{
+    for (const entry of entries) if (entry.isIntersecting) {
+      const chapter=Number(entry.target.dataset.loadChapter);
+      if (bibleLoader.status(location.book,chapter).state==='idle') requestChapter(location.book,chapter);
+    }
+  },{root:window.matchMedia('(min-width:1024px)').matches?document.querySelector('.scripture-column'):null,rootMargin:'700px'});
+  document.querySelectorAll('[data-load-chapter]').forEach(node=>chapterObserver.observe(node));
+}
 function readSaved() {
   try { store = createVerseStore(window.localStorage); saved = store.list(); storageError = null; return true; }
   catch (error) { storageError = error; return false; }
@@ -77,7 +114,8 @@ function storageBanner() {
   return `<section class="storage-error" role="alert"><p>${escapeHtml(storageError.message || '표시한 구절을 불러오지 못했습니다.')}</p><button class="text-button" data-action="retry-storage">다시 시도</button></section>`;
 }
 function footerDisclosure() {
-  return `<details class="content-footnote"><summary class="meta">본문과 설명에 관하여</summary><p>현재 내장 본문은 개역개정 데살로니가전서 5:16–20의 짧은 발췌입니다. 전체 장은 대한성서공회 공식 본문에서 확인할 수 있습니다.</p><p>본문 도움은 성경에 기록된 내용과 근거 장절을 연결한 설명입니다. 개인의 묵상은 마이페이지에 따로 보관합니다.</p><p>표시한 구절과 묵상은 이 브라우저에만 저장되며 서버로 전송하지 않습니다.</p></details>`;
+  const source=bibleLoader?'<p>개역개정 본문 제공: <a href="https://logos-api.com/" target="_blank" rel="noopener noreferrer">Logos API</a>. 성경 본문의 권리는 원저작권자에게 있습니다. 개인의 비상업적 읽기를 돕기 위해 읽는 장을 요청합니다. 합절은 원문 범위대로 표시합니다.</p><p>Logos API © 2025 Su Ho Choi · <a href="https://github.com/Hasegos/logos-api" target="_blank" rel="noopener noreferrer">제공자와 출처</a> · <a href="https://logos-api.com/terms" target="_blank" rel="noopener noreferrer">이용약관</a></p>':'<p>현재 내장 본문은 개역개정 데살로니가전서 5:16–20의 짧은 발췌입니다. 전체 장은 대한성서공회 공식 본문에서 확인할 수 있습니다.</p>';
+  return `<details class="content-footnote"><summary class="meta">본문과 설명에 관하여</summary>${source}<p>본문 도움은 성경에 기록된 내용과 근거 장절을 연결한 설명입니다. 개인의 묵상은 마이페이지에 따로 보관합니다.</p><p>표시한 구절과 묵상은 이 브라우저에만 저장되며 서버로 전송하지 않습니다.</p></details>`;
 }
 function contextMarkup() {
   const current = {...location,verse:activeVerse};
@@ -92,15 +130,19 @@ function contextMarkup() {
     <details class="evidence-detail"><summary>근거 장절 확인</summary><div class="evidence-box"><p class="small">대한성서공회 · 개역개정</p>${context.references.map(ref=>`<a class="text-link" href="${escapeHtml(ref.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(ref.label)} ↗<span class="visually-hidden"> — 새 탭</span></a>`).join('')}<p class="small">근거 확인은 새 탭에서 열리며 읽던 본문은 유지됩니다.</p></div></details>
     <details class="future-detail"><summary>이후 본문 연결 펼치기</summary><div class="stack"><p>${escapeHtml(context.after)}</p><p class="meta">근거 · ${escapeHtml(context.afterRef)}</p></div></details>` : '<p>이 구절에 등록된 설명이 아직 없습니다.</p><p class="meta">본문 읽기와 구절 표시는 계속할 수 있습니다.</p>'}`;
 }
+function verseNode(target) {
+  if (target.verse===null) return null;
+  return document.getElementById(verseElementId(target)) || [...document.querySelectorAll(`[data-chapter="${target.chapter}"][data-verse]`)].find(node=>Number(node.dataset.verse)<=target.verse&&Number(node.dataset.endVerse)>=target.verse);
+}
 function focusSelectedVerse() {
-  if(activeVerse!==null)document.getElementById(verseElementId({...location,verse:activeVerse}))?.focus({preventScroll:true});
+  if(activeVerse!==null)verseNode({...location,verse:activeVerse})?.focus({preventScroll:true});
 }
 function scrollToReadingLocation() {
-  const target=location.verse!==null?document.getElementById(verseElementId(location)):location.chapter>1?document.getElementById(`chapter-${location.chapter}`):null;
+  const target=verseNode(location)||((location.chapter>1||location.verse!==null)?document.getElementById(`chapter-${location.chapter}`):null);
   if(target)target.scrollIntoView({block:location.verse!==null?'center':'start'});
   else {document.querySelector('.scripture-column').scrollTop=0;window.scrollTo(0,0);}
 }
-function renderReader() {
+function renderReader({preserveContext=false}={}) {
   const modal = !addressError && mobileOpen && window.matchMedia('(max-width:1023px)').matches;
   document.body.classList.toggle('context-open',modal);
   document.querySelector('.app-header').inert=modal;
@@ -110,29 +152,69 @@ function renderReader() {
   }
   const book=getBook(location.book),chapters=getBookChapters(book.id),included=chapters.filter(chapter=>chapter.available);
   const complete=included.length===book.chapters&&included.every(chapter=>!chapter.partial);
-  const scope=complete?`1–${book.chapters}장 · 책 전체`:included.length?`현재 수록: ${included.map(chapter=>chapter.partial?`${chapter.chapter}장 ${chapter.excerpt.from}–${chapter.excerpt.to}절 발췌`:`${chapter.chapter}장`).join(', ')}`:'개역개정 본문 연결 준비 중';
+  const scope=bibleLoader?`Logos API · ${chapters.filter(chapter=>chapter.available&&!chapter.partial).length}/${book.chapters}장 불러옴 · 스크롤하며 이어 읽기`:complete?`1–${book.chapters}장 · 책 전체`:included.length?`현재 수록: ${included.map(chapter=>chapter.partial?`${chapter.chapter}장 ${chapter.excerpt.from}–${chapter.excerpt.to}절 발췌`:`${chapter.chapter}장`).join(', ')}`:'개역개정 본문 연결 준비 중';
   const prev=adjacentBook(location,-1),next=adjacentBook(location,1);
   const column=document.querySelector('.scripture-column');
   const oldScroll=column?.dataset.book===book.id?column.scrollTop:0;
+  const sameBook=column?.dataset.book===book.id;
+  const desktop=window.matchMedia('(min-width:1024px)').matches;
+  const visibleTop=desktop&&sameBook?column.getBoundingClientRect().top:0;
+  const anchor=sameBook?[...column.querySelectorAll('.verse,.chapter-title')].find(node=>node.getBoundingClientRect().bottom>visibleTop+12):null;
+  const anchorTop=anchor?.getBoundingClientRect().top;
+  const oldContext=preserveContext?document.querySelector('.context-panel'):null;
+  const focusedContext=oldContext?.contains(document.activeElement)?document.activeElement:null;
   const officialUrl=officialBibleUrl(book.id,location.chapter);
   main.innerHTML=`<div class="reading-layout"><section class="scripture-column" data-book="${book.id}" aria-label="성경 본문" ${modal?'inert':''}>${storageBanner()}<p class="eyebrow">개역개정 · ${book.testament==='OT'?'구약':'신약'} · ${book.chapters}장</p><div class="chapter-heading"><h1 class="book-title" tabindex="-1">${escapeHtml(book.name)}</h1><button class="text-button" data-action="chapter" aria-label="책 선택과 장 바로가기">책 선택 <span aria-hidden="true">⌄</span></button></div>
     <p class="small chapter-note">${scope}</p>
-    ${included.length?`${bookChaptersMarkup(book.id,chapters,{chapter:location.chapter,verse:activeVerse},saved)}<p class="meta">구절을 누르면 배경과 근거를 볼 수 있습니다.</p>${!complete?'<p class="meta book-coverage">이 책의 나머지 본문은 이용 허락과 자료를 확보한 뒤 이어집니다.</p>':''}`:`<div class="unavailable"><h2>이 책의 본문은 아직 연결되지 않았습니다.</h2><p>개역개정 전체 본문의 이용 허락과 제공 자료를 확인하고 있습니다. 현재는 대한성서공회에서 본문을 읽을 수 있습니다.</p><a class="outline-button" href="${escapeHtml(officialUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(book.name)} ${location.chapter}장 공식 본문 ↗<span class="visually-hidden"> — 새 탭</span></a><p class="meta">본문 도움 예시: 데살로니가전서 5:16–20</p><a class="text-link" href="${escapeHtml(linkTo(DEFAULT_LOCATION))}">본문 도움 예시 보기 →</a></div>`}
+    ${included.length||bibleLoader?`${bookChaptersMarkup(book.id,chapters,{chapter:location.chapter,verse:activeVerse},saved,{remote:!!bibleLoader,statusFor:chapter=>bibleLoader?.status(book.id,chapter)||{state:'idle'}})}<p class="meta">구절을 누르면 배경과 근거를 볼 수 있습니다.</p>${!complete&&!bibleLoader?'<p class="meta book-coverage">이 책의 나머지 본문은 이용 허락과 자료를 확보한 뒤 이어집니다.</p>':''}`:`<div class="unavailable"><h2>이 책의 본문은 아직 연결되지 않았습니다.</h2><p>개역개정 전체 본문의 이용 허락과 제공 자료를 확인하고 있습니다. 현재는 대한성서공회에서 본문을 읽을 수 있습니다.</p><a class="outline-button" href="${escapeHtml(officialUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(book.name)} ${location.chapter}장 공식 본문 ↗<span class="visually-hidden"> — 새 탭</span></a><p class="meta">본문 도움 예시: 데살로니가전서 5:16–20</p><a class="text-link" href="${escapeHtml(linkTo(DEFAULT_LOCATION))}">본문 도움 예시 보기 →</a></div>`}
     <nav class="chapter-footer" aria-label="책 이동">${prev?`<a class="text-button" href="${escapeHtml(linkTo(prev))}">← ${escapeHtml(getBook(prev.book).name)}</a>`:'<span></span>'}${next?`<a class="text-button" href="${escapeHtml(linkTo(next))}">${escapeHtml(getBook(next.book).name)} →</a>`:'<span></span>'}</nav>${included.length?`<a class="text-link small" href="${escapeHtml(officialUrl)}" target="_blank" rel="noopener noreferrer">선택한 장의 공식 본문 ↗<span class="visually-hidden"> — 새 탭</span></a>`:''}${footerDisclosure()}</section><aside class="context-panel" ${modal?'role="dialog" aria-modal="true" aria-labelledby="context-title"':'aria-label="선택한 구절의 배경"'}>${contextMarkup()}</aside></div>`;
   document.querySelector('.scripture-column').scrollTop=oldScroll;
+  if (oldContext) { document.querySelector('.context-panel').replaceWith(oldContext); focusedContext?.focus({preventScroll:true}); }
+  const newAnchor=anchor?.id?document.getElementById(anchor.id):null;
+  if (newAnchor) {
+    const offset=newAnchor.getBoundingClientRect().top-anchorTop;
+    if (desktop) document.querySelector('.scripture-column').scrollTop+=offset;
+    else window.scrollBy(0,offset);
+  }
+  observeChapters();
 }
 function editorMarkup(row) {
   const isEditing=editor?.id===key(row);
   if (isEditing) return `<form class="reflection reflection-editor" data-editor="${key(row)}"><label for="reflection-input">나의 묵상</label><textarea id="reflection-input" name="reflection" maxlength="10000" aria-describedby="reflection-help reflection-count" spellcheck="false">${escapeHtml(editor.value)}</textarea><div class="editor-meta"><span id="reflection-help">이 브라우저에만 저장됩니다.</span><span id="reflection-count">${editor.value.length.toLocaleString()} / 10,000자</span></div><div class="reflection-error" role="alert" ${editor.error?'':'hidden'}>${escapeHtml(editor.error || '')}</div><div class="actions"><button class="primary-button" type="submit" ${editor.external?'disabled':''}>묵상 저장</button><button class="text-button" type="button" data-action="cancel-reflection">취소</button></div></form>`;
   return `<section class="reflection" aria-label="${escapeHtml(label(row))} 나의 묵상"><h3>나의 묵상</h3>${row.reflection?`<p class="reflection-text">${escapeHtml(row.reflection)}</p>`:'<p class="reflection-empty">이 구절을 읽으며 남기고 싶은 생각을 적어 보세요.</p>'}<button class="text-button" data-edit="${key(row)}">${row.reflection?'묵상 수정':'묵상 쓰기'}</button></section>`;
 }
+function savedTextStatus(row) {
+  if(!bibleLoader)return '';
+  const chapter=getChapter(row.book,row.chapter);
+  const status=bibleLoader.status(row.book,row.chapter);
+  if(chapter.source==='logos')return '<p class="small">본문 제공 · Logos API</p>';
+  if(status.state==='loading')return '<p class="meta" role="status">이 장의 본문을 불러오고 있습니다.</p>';
+  if(status.state==='error')return `<p class="meta" role="status">${escapeHtml(status.message||'본문을 불러오지 못했습니다.')}${status.retryAfter?` ${status.retryAfter}초 후 다시 시도해 주세요.`:''}</p><button type="button" class="text-button" data-retry-book="${row.book}" data-retry-chapter="${row.chapter}">본문 다시 불러오기</button>`;
+  return '<p class="meta">이 장의 본문을 불러올 준비 중입니다.</p>';
+}
+function updateSavedTexts() {
+  if(!isMyPage)return;
+  for(const item of document.querySelectorAll('.saved-item[data-item]')) {
+    const row=saved.find(value=>key(value)===item.dataset.item);
+    if(!row)continue;
+    const verse=getVerse(row),status=bibleLoader?.status(row.book,row.chapter);
+    item.querySelector('.saved-quote .verse-words').textContent=verse?.text||(bibleLoader?(status?.state==='error'?'본문을 불러오지 못했습니다.':'이 구절의 본문을 불러오는 중입니다.'):'이 구절의 본문은 공식 개역개정 본문에서 확인해 주세요.');
+    item.querySelector('.saved-quote .verse-number').textContent=verse&&verse.endVerse>verse.verseStart?`${verse.verseStart}–${verse.endVerse}`:String(row.verse);
+    item.querySelector('[data-saved-text-status]').innerHTML=savedTextStatus(row);
+  }
+}
 function renderMyPage() {
   const books=BOOKS.filter(b=>saved.some(row=>row.book===b.id));
   const rows=saved.filter(row=>filter==='all'||row.book===filter).sort(sort==='bible'?compareLocations:(a,b)=>b.savedAt.localeCompare(a.savedAt));
   main.innerHTML=`<section class="collection"><div class="collection-heading"><p class="eyebrow">마이페이지</p><h1>뜻깊은 구절</h1><p class="meta">이 브라우저에 저장된 구절과 나의 묵상입니다.</p></div>${storageBanner()}
     ${!storageError&&saved.length?`<div class="collection-controls"><div class="sort-controls" role="group" aria-label="구절 정렬"><button class="${sort==='recent'?'primary-button':'text-button'}" data-sort="recent" aria-pressed="${sort==='recent'}">최근 표시순${sort==='recent'?' ✓':''}</button><button class="${sort==='bible'?'primary-button':'text-button'}" data-sort="bible" aria-pressed="${sort==='bible'}">성경 순서${sort==='bible'?' ✓':''}</button></div><label class="visually-hidden" for="book-filter">저장된 성경 책 필터</label><select class="book-filter" id="book-filter"><option value="all">전체 성경</option>${books.map(b=>`<option value="${b.id}" ${filter===b.id?'selected':''}>${escapeHtml(b.name)}</option>`).join('')}</select></div>`:''}
-    ${storageError?'':rows.length?`<div class="saved-list">${rows.map(row=>{const verse=getVerse(row);return `<article class="saved-item" data-item="${key(row)}"><h2>${escapeHtml(label(row))}</h2><div class="saved-quote"><span class="verse-number" aria-hidden="true">${row.verse}</span><p class="verse-copy"><span class="verse-words">${escapeHtml(verse?.text||'이 구절의 본문은 공식 개역개정 본문에서 확인해 주세요.')}</span></p></div><div class="actions item-actions"><a class="text-button" href="${escapeHtml(linkTo(row))}">본문에서 보기 →</a><button class="text-button" data-remove="${key(row)}">표시 해제</button></div>${editorMarkup(row)}</article>`;}).join('')}</div>`:`<div class="empty-state"><h2>${saved.length?'이 책에 표시한 구절이 없습니다.':'표시한 구절이 아직 없습니다.'}</h2><p>성경을 읽으며 뜻깊은 구절을 표시하고 묵상을 남겨 보세요.</p>${saved.length?'<button class="outline-button" data-action="all-books">전체 보기</button>':`<a class="outline-button" href="${escapeHtml(lastReading().url)}">성경 읽으러 가기 →</a>`}</div>`}
+    ${storageError?'':rows.length?`<div class="saved-list">${rows.map(row=>{const verse=getVerse(row);return `<article class="saved-item" data-item="${key(row)}"><h2>${escapeHtml(label(row))}</h2><div class="saved-quote"><span class="verse-number" aria-hidden="true">${row.verse}</span><p class="verse-copy"><span class="verse-words">${escapeHtml(verse?.text||(bibleLoader?'이 구절의 본문을 불러오는 중입니다.':'이 구절의 본문은 공식 개역개정 본문에서 확인해 주세요.'))}</span></p></div><div class="saved-body-status" data-saved-text-status>${savedTextStatus(row)}</div><div class="actions item-actions"><a class="text-button" href="${escapeHtml(linkTo(row))}">본문에서 보기 →</a><button class="text-button" data-remove="${key(row)}">표시 해제</button></div>${editorMarkup(row)}</article>`;}).join('')}</div>`:`<div class="empty-state"><h2>${saved.length?'이 책에 표시한 구절이 없습니다.':'표시한 구절이 아직 없습니다.'}</h2><p>성경을 읽으며 뜻깊은 구절을 표시하고 묵상을 남겨 보세요.</p>${saved.length?'<button class="outline-button" data-action="all-books">전체 보기</button>':`<a class="outline-button" href="${escapeHtml(lastReading().url)}">성경 읽으러 가기 →</a>`}</div>`}
     <p class="collection-notice">구절과 묵상은 같은 브라우저에만 저장됩니다. 다른 기기로 자동 동기화되지 않으며, 브라우저 데이터를 지우면 함께 삭제됩니다.</p></section>`;
+  updateSavedTexts();
+  if(bibleLoader&&!storageError) {
+    const chapters=new Map(rows.map(row=>[`${row.book}:${row.chapter}`,row]));
+    for(const row of chapters.values())if(bibleLoader.status(row.book,row.chapter).state==='idle')requestChapter(row.book,row.chapter);
+  }
 }
 function render() { if (isMyPage) renderMyPage(); else renderReader(); updateHeader(); }
 function updateHeader() {
@@ -175,9 +257,10 @@ function chapterDialog() {
   chapters();document.querySelector('#book-choice').addEventListener('change',chapters);
   document.querySelector('#chapter-form').addEventListener('submit',event=>{
     event.preventDefault();const data=new FormData(event.currentTarget);
-    dialog.close();location={translation:'GAE',book:data.get('book'),chapter:Number(data.get('chapter')||1),verse:null};activeVerse=null;mobileOpen=false;
+    dialog.close();bibleLoader?.cancelPending();location={translation:'GAE',book:data.get('book'),chapter:Number(data.get('chapter')||1),verse:null};activeVerse=null;mobileOpen=false;awaitingDeepLink=false;
+    requestChapter(location.book,location.chapter);
     window.history.pushState(null,'',linkTo(location));renderReader();updateHeader();document.querySelector('.book-title').focus({preventScroll:true});scrollToReadingLocation();rememberReading();
-    if(data.get('chapter')&&!getChapter(location.book,location.chapter).available)toast(`${location.chapter}장의 본문은 아직 연결되지 않았습니다.`);
+    if(!bibleLoader&&data.get('chapter')&&!getChapter(location.book,location.chapter).available)toast(`${location.chapter}장의 본문은 아직 연결되지 않았습니다.`);
   });
   dialog.showModal();
 }
@@ -189,9 +272,10 @@ function settingsDialog() {
 }
 
 document.addEventListener('click',event=>{
+  const retry=event.target.closest('[data-retry-chapter]');if(retry){requestChapter(retry.dataset.retryBook,Number(retry.dataset.retryChapter));return;}
   const close=event.target.closest('[data-close-dialog]');if(close){close.closest('dialog').close();return;}
   const settingsButton=event.target.closest('.settings-trigger');if(settingsButton){settingsDialog();return;}
-  const verseButton=event.target.closest('[data-verse]');if(verseButton){activeVerse=Number(verseButton.dataset.verse);location={...location,chapter:Number(verseButton.dataset.chapter),verse:activeVerse};mobileOpen=window.matchMedia('(max-width:1023px)').matches;if(mobileOpen)window.history.pushState({biblejeongContext:true},'',linkTo(location));else window.history.replaceState(null,'',linkTo(location));rememberReading();renderReader();updateHeader();if(mobileOpen)document.querySelector('#context-title')?.focus({preventScroll:true});else focusSelectedVerse();return;}
+  const verseButton=event.target.closest('[data-verse]');if(verseButton){activeVerse=verseForRange({...location,verse:activeVerse},{chapter:Number(verseButton.dataset.chapter),verse:Number(verseButton.dataset.verse),endVerse:Number(verseButton.dataset.endVerse)},saved);location={...location,chapter:Number(verseButton.dataset.chapter),verse:activeVerse};mobileOpen=window.matchMedia('(max-width:1023px)').matches;if(mobileOpen)window.history.pushState({biblejeongContext:true},'',linkTo(location));else window.history.replaceState(null,'',linkTo(location));rememberReading();renderReader();updateHeader();if(mobileOpen)document.querySelector('#context-title')?.focus({preventScroll:true});else focusSelectedVerse();return;}
   const edit=event.target.closest('[data-edit]');if(edit){openEditor(edit.dataset.edit);return;}
   const remove=event.target.closest('[data-remove]');if(remove){const row=saved.find(r=>key(r)===remove.dataset.remove);if(row)removeRow(row);return;}
   const sorting=event.target.closest('[data-sort]');if(sorting){if(!discardDraft())return;sort=sorting.dataset.sort;renderMyPage();return;}
@@ -238,6 +322,9 @@ window.addEventListener('popstate',()=>{
       location={...previous};activeVerse=previous.verse;window.history.replaceState(null,'',linkTo(location));
     }
   }catch(error){addressError=error;}
+  if(previous.book!==location.book)bibleLoader?.cancelPending();
+  awaitingDeepLink=!addressError&&location.verse!==null&&!getVerse(location);
+  if(!addressError)requestChapter(location.book,location.chapter);
   renderReader();updateHeader();
   if(mobileOpen)document.querySelector('#context-title')?.focus({preventScroll:true});
   else {if(!wasOpen||previous.book!==location.book)scrollToReadingLocation();focusSelectedVerse();}
@@ -254,6 +341,7 @@ document.addEventListener('keydown',event=>{
 });
 render();
 if(!isMyPage&&!addressError){
+  requestChapter(location.book,location.chapter);
   const previous=lastReading();
   requestAnimationFrame(()=>{
     if(previous.url===new URL(linkTo(location),window.location.href).href&&previous.scroll){const col=document.querySelector('.scripture-column');if(window.matchMedia('(min-width:1024px)').matches)col.scrollTop=previous.scroll;else window.scrollTo(0,previous.scroll);}
