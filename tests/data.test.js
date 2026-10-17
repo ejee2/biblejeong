@@ -1,6 +1,50 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { BOOKS, DEFAULT_LOCATION, getBook, getChapter, getVerse, getContext, officialBibleUrl, parseReadingLocation, readingUrl, compareLocations } from '../assets/bible-data.js';
+import * as bibleData from '../assets/bible-data.js';
+
+test('a whole book supplies every chapter in reading order without inventing unavailable text', () => {
+  assert.equal(typeof bibleData.getBookChapters, 'function');
+  let chapterCount = 0;
+  for (const book of BOOKS) {
+    const chapters = bibleData.getBookChapters(book.id);
+    assert.equal(chapters.length, book.chapters);
+    chapterCount += chapters.length;
+    for (const [index, chapter] of chapters.entries()) {
+      assert.equal(chapter.book, book.id);
+      assert.equal(chapter.chapter, index + 1);
+      assert.equal(new URL(chapter.officialUrl).searchParams.get('chap'), String(index + 1));
+      if (book.id !== '1th' || chapter.chapter !== 5) {
+        assert.equal(chapter.available, false);
+        assert.equal(chapter.partial, false);
+        assert.deepEqual(chapter.verses, []);
+      }
+    }
+  }
+  assert.equal(chapterCount, 1189);
+  const excerpt = bibleData.getBookChapters('1th')[4];
+  assert.equal(excerpt.available, true);
+  assert.equal(excerpt.partial, true);
+  assert.deepEqual(excerpt.verses.map(({verse}) => verse), [16, 17, 18, 19, 20]);
+  assert.throws(() => bibleData.getBookChapters('unknown'), TypeError);
+});
+
+test('mutating one whole-book result cannot corrupt subsequent reading or saved verse lookups', () => {
+  assert.equal(typeof bibleData.getBookChapters, 'function');
+  const chapters = bibleData.getBookChapters('1th');
+  chapters[4].verses[0].text = '변경';
+  chapters[4].verses.pop();
+  chapters[4].excerpt.from = 1;
+  chapters[0].available = true;
+  chapters.pop();
+  const fresh = bibleData.getBookChapters('1th');
+  assert.equal(fresh.length, 5);
+  assert.equal(fresh[0].available, false);
+  assert.equal(fresh[4].verses[0].text, '항상 기뻐하라');
+  assert.equal(fresh[4].verses.length, 5);
+  assert.deepEqual(fresh[4].excerpt, {from:16, to:20});
+  assert.equal(getVerse({book:'1th', chapter:5, verse:16}).text, '항상 기뻐하라');
+});
 
 test('all 66 books are selectable with canonical ordering and chapter boundaries', () => {
   assert.equal(BOOKS.length, 66);

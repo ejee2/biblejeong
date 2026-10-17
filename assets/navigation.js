@@ -1,4 +1,17 @@
-import { BOOKS, getBook } from './bible-data.js';
+import { BOOKS, getBook, normalizeLocation } from './bible-data.js';
+
+export function adjacentBook(location, direction) {
+  const normalized = normalizeLocation(location);
+  if (direction !== -1 && direction !== 1) throw new TypeError('책 이동 방향을 확인해 주세요.');
+  const book = getBook(normalized.book);
+  const next = BOOKS[book.order - 1 + direction];
+  return next ? { translation:'GAE', book:next.id, chapter:1, verse:null } : null;
+}
+
+export function verseElementId(location) {
+  const { book, chapter, verse } = normalizeLocation(location, { requireVerse:true });
+  return `verse-${book}-${chapter}-${verse}`;
+}
 
 export function adjacentChapter(location, direction) {
   const book = getBook(location.book);

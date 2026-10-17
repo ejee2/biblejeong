@@ -1,6 +1,7 @@
-import { BOOKS, DEFAULT_LOCATION, getBook, getChapter, getVerse, getContext, officialBibleUrl, parseReadingLocation, readingUrl, compareLocations } from './bible-data.js';
+import { BOOKS, DEFAULT_LOCATION, getBook, getBookChapters, getChapter, getVerse, getContext, officialBibleUrl, parseReadingLocation, readingUrl, compareLocations } from './bible-data.js';
 import { createVerseStore, STORAGE_KEY } from './store.js';
-import { adjacentChapter } from './navigation.js';
+import { adjacentBook, verseElementId } from './navigation.js';
+import { bookChaptersMarkup } from './book-reader.js';
 
 const main = document.querySelector('#main');
 const isMyPage = document.body.dataset.page === 'mypage';
@@ -56,7 +57,7 @@ function lastReading() {
 function rememberReading() {
   if (isMyPage || addressError) return;
   const scroll = document.querySelector('.scripture-column')?.scrollTop || window.scrollY;
-  try { window.sessionStorage.setItem(returnKey, JSON.stringify({url:linkTo(location),scroll})); } catch { /* Return falls back to the default chapter. */ }
+  try { window.sessionStorage.setItem(returnKey, JSON.stringify({url:linkTo(location),scroll})); } catch { /* Return falls back to the default book. */ }
 }
 function dirty() { return editor && editor.value !== editor.initial; }
 function discardDraft() {
@@ -91,6 +92,14 @@ function contextMarkup() {
     <details class="evidence-detail"><summary>근거 장절 확인</summary><div class="evidence-box"><p class="small">대한성서공회 · 개역개정</p>${context.references.map(ref=>`<a class="text-link" href="${escapeHtml(ref.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(ref.label)} ↗<span class="visually-hidden"> — 새 탭</span></a>`).join('')}<p class="small">근거 확인은 새 탭에서 열리며 읽던 본문은 유지됩니다.</p></div></details>
     <details class="future-detail"><summary>이후 본문 연결 펼치기</summary><div class="stack"><p>${escapeHtml(context.after)}</p><p class="meta">근거 · ${escapeHtml(context.afterRef)}</p></div></details>` : '<p>이 구절에 등록된 설명이 아직 없습니다.</p><p class="meta">본문 읽기와 구절 표시는 계속할 수 있습니다.</p>'}`;
 }
+function focusSelectedVerse() {
+  if(activeVerse!==null)document.getElementById(verseElementId({...location,verse:activeVerse}))?.focus({preventScroll:true});
+}
+function scrollToReadingLocation() {
+  const target=location.verse!==null?document.getElementById(verseElementId(location)):location.chapter>1?document.getElementById(`chapter-${location.chapter}`):null;
+  if(target)target.scrollIntoView({block:location.verse!==null?'center':'start'});
+  else {document.querySelector('.scripture-column').scrollTop=0;window.scrollTo(0,0);}
+}
 function renderReader() {
   const modal = !addressError && mobileOpen && window.matchMedia('(max-width:1023px)').matches;
   document.body.classList.toggle('context-open',modal);
@@ -99,13 +108,17 @@ function renderReader() {
   if (addressError) {
     main.innerHTML=`<section class="address-error"><p class="eyebrow">본문 주소 확인</p><h1>이 본문 주소를 찾을 수 없습니다.</h1><p>${escapeHtml(addressError.message)}</p><a class="outline-button" href="${escapeHtml(linkTo(DEFAULT_LOCATION))}">본문 선택으로 돌아가기</a></section>`; return;
   }
-  const chapter=getChapter(location.book,location.chapter),book=getBook(location.book);
-  const prev=adjacentChapter(location,-1),next=adjacentChapter(location,1);
-  const oldScroll=document.querySelector('.scripture-column')?.scrollTop || 0;
-  main.innerHTML=`<div class="reading-layout"><section class="scripture-column" aria-label="성경 본문" ${modal?'inert':''}>${storageBanner()}<p class="eyebrow">개역개정 · ${book.testament==='OT'?'구약':'신약'}</p><div class="chapter-heading"><h1>${escapeHtml(book.name)} ${location.chapter}장</h1><button class="text-button chapter-trigger" data-action="chapter" aria-label="성경과 장 선택">⌄</button></div>
-    <p class="small chapter-note">${chapter.partial?'16–20절 · 짧은 발췌':'공식 개역개정 본문 안내'}</p>
-    ${chapter.available?`<div class="verse-list">${chapter.verses.map(v=>{const current={...location,verse:v.verse};const marked=saved.some(r=>key(r)===key(current));return `<button type="button" id="verse-${v.verse}" class="verse${marked?' is-saved':''}${activeVerse===v.verse?' is-current':''}" data-verse="${v.verse}" aria-label="${v.verse}절 ${escapeHtml(v.text)}. 배경 보기${marked?', 표시한 구절':''}" aria-pressed="${activeVerse===v.verse}"><span class="verse-number" aria-hidden="true">${v.verse}</span><span class="verse-copy"><span class="verse-words">${escapeHtml(v.text)}</span></span></button>`;}).join('')}</div><p class="meta">구절을 누르면 배경과 근거를 볼 수 있습니다.</p>`:`<div class="unavailable"><h2>이 장의 본문은 공식 사이트에서 읽을 수 있습니다.</h2><p>아직 이 페이지에 내장하지 않은 본문입니다. 전체 본문을 임의로 채우지 않고 공식 개역개정 본문으로 연결합니다.</p><a class="outline-button" href="${escapeHtml(chapter.officialUrl)}" target="_blank" rel="noopener noreferrer">공식 본문에서 읽기 ↗<span class="visually-hidden"> — 새 탭</span></a><p class="meta">등록된 도움 예시: 데살로니가전서 5:16–20</p><a class="text-link" href="${escapeHtml(linkTo(DEFAULT_LOCATION))}">본문 도움 예시로 돌아가기 →</a></div>`}
-    <nav class="chapter-footer" aria-label="장 이동">${prev?`<a class="text-button" href="${escapeHtml(linkTo(prev))}">← 이전 장</a>`:'<span></span>'}${next?`<a class="text-button" href="${escapeHtml(linkTo(next))}">다음 장 →</a>`:'<span></span>'}</nav>${chapter.available?`<a class="text-link small" href="${escapeHtml(chapter.officialUrl)}" target="_blank" rel="noopener noreferrer">이 장 전체를 공식 본문에서 읽기 ↗<span class="visually-hidden"> — 새 탭</span></a>`:''}${footerDisclosure()}</section><aside class="context-panel" ${modal?'role="dialog" aria-modal="true" aria-labelledby="context-title"':'aria-label="선택한 구절의 배경"'}>${contextMarkup()}</aside></div>`;
+  const book=getBook(location.book),chapters=getBookChapters(book.id),included=chapters.filter(chapter=>chapter.available);
+  const complete=included.length===book.chapters&&included.every(chapter=>!chapter.partial);
+  const scope=complete?`1–${book.chapters}장 · 책 전체`:included.length?`현재 수록: ${included.map(chapter=>chapter.partial?`${chapter.chapter}장 ${chapter.excerpt.from}–${chapter.excerpt.to}절 발췌`:`${chapter.chapter}장`).join(', ')}`:'개역개정 본문 연결 준비 중';
+  const prev=adjacentBook(location,-1),next=adjacentBook(location,1);
+  const column=document.querySelector('.scripture-column');
+  const oldScroll=column?.dataset.book===book.id?column.scrollTop:0;
+  const officialUrl=officialBibleUrl(book.id,location.chapter);
+  main.innerHTML=`<div class="reading-layout"><section class="scripture-column" data-book="${book.id}" aria-label="성경 본문" ${modal?'inert':''}>${storageBanner()}<p class="eyebrow">개역개정 · ${book.testament==='OT'?'구약':'신약'} · ${book.chapters}장</p><div class="chapter-heading"><h1 class="book-title" tabindex="-1">${escapeHtml(book.name)}</h1><button class="text-button" data-action="chapter" aria-label="책 선택과 장 바로가기">책 선택 <span aria-hidden="true">⌄</span></button></div>
+    <p class="small chapter-note">${scope}</p>
+    ${included.length?`${bookChaptersMarkup(book.id,chapters,{chapter:location.chapter,verse:activeVerse},saved)}<p class="meta">구절을 누르면 배경과 근거를 볼 수 있습니다.</p>${!complete?'<p class="meta book-coverage">이 책의 나머지 본문은 이용 허락과 자료를 확보한 뒤 이어집니다.</p>':''}`:`<div class="unavailable"><h2>이 책의 본문은 아직 연결되지 않았습니다.</h2><p>개역개정 전체 본문의 이용 허락과 제공 자료를 확인하고 있습니다. 현재는 대한성서공회에서 본문을 읽을 수 있습니다.</p><a class="outline-button" href="${escapeHtml(officialUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(book.name)} ${location.chapter}장 공식 본문 ↗<span class="visually-hidden"> — 새 탭</span></a><p class="meta">본문 도움 예시: 데살로니가전서 5:16–20</p><a class="text-link" href="${escapeHtml(linkTo(DEFAULT_LOCATION))}">본문 도움 예시 보기 →</a></div>`}
+    <nav class="chapter-footer" aria-label="책 이동">${prev?`<a class="text-button" href="${escapeHtml(linkTo(prev))}">← ${escapeHtml(getBook(prev.book).name)}</a>`:'<span></span>'}${next?`<a class="text-button" href="${escapeHtml(linkTo(next))}">${escapeHtml(getBook(next.book).name)} →</a>`:'<span></span>'}</nav>${included.length?`<a class="text-link small" href="${escapeHtml(officialUrl)}" target="_blank" rel="noopener noreferrer">선택한 장의 공식 본문 ↗<span class="visually-hidden"> — 새 탭</span></a>`:''}${footerDisclosure()}</section><aside class="context-panel" ${modal?'role="dialog" aria-modal="true" aria-labelledby="context-title"':'aria-label="선택한 구절의 배경"'}>${contextMarkup()}</aside></div>`;
   document.querySelector('.scripture-column').scrollTop=oldScroll;
 }
 function editorMarkup(row) {
@@ -156,11 +169,16 @@ function saveReflection(event) {
 }
 function chapterDialog() {
   const dialog=document.querySelector('#chapter-dialog');
-  dialog.innerHTML=`<form id="chapter-form"><div class="dialog-head"><h2 id="chapter-dialog-title">본문 선택</h2><button type="button" class="close-button" data-close-dialog aria-label="닫기">×</button></div><div class="field"><label for="book-choice">성경</label><select id="book-choice" name="book"><optgroup label="구약">${BOOKS.filter(b=>b.testament==='OT').map(bookOption).join('')}</optgroup><optgroup label="신약">${BOOKS.filter(b=>b.testament==='NT').map(bookOption).join('')}</optgroup></select></div><div class="field"><label for="chapter-choice">장</label><select id="chapter-choice" name="chapter"></select></div><p class="meta">원하는 책과 장을 자유롭게 살펴보세요.</p><div class="dialog-actions"><button type="button" class="text-button" data-close-dialog>취소</button><button class="primary-button" type="submit">이 장 읽기</button></div></form>`;
+  dialog.innerHTML=`<form id="chapter-form"><div class="dialog-head"><h2 id="chapter-dialog-title">읽을 책 선택</h2><button type="button" class="close-button" data-close-dialog aria-label="닫기">×</button></div><div class="field"><label for="book-choice">성경</label><select id="book-choice" name="book"><optgroup label="구약">${BOOKS.filter(b=>b.testament==='OT').map(bookOption).join('')}</optgroup><optgroup label="신약">${BOOKS.filter(b=>b.testament==='NT').map(bookOption).join('')}</optgroup></select></div><div class="field"><label for="chapter-choice">장 바로가기 (선택)</label><select id="chapter-choice" name="chapter"></select></div><p class="meta">한 책의 본문을 이어서 읽습니다. 장은 책 안의 이동 위치입니다.</p><div class="dialog-actions"><button type="button" class="text-button" data-close-dialog>취소</button><button class="primary-button" type="submit">이 책 읽기</button></div></form>`;
   function bookOption(b) {return `<option value="${b.id}" ${b.id===location.book?'selected':''}>${escapeHtml(b.name)}</option>`;}
-  function chapters(value) { const book=getBook(document.querySelector('#book-choice').value);document.querySelector('#chapter-choice').innerHTML=Array.from({length:book.chapters},(_,i)=>`<option value="${i+1}" ${i+1===value?'selected':''}>${i+1}장</option>`).join(''); }
-  chapters(location.chapter);document.querySelector('#book-choice').addEventListener('change',()=>chapters(1));
-  document.querySelector('#chapter-form').addEventListener('submit',event=>{event.preventDefault();if (!discardDraft())return;const data=new FormData(event.currentTarget);window.location.href=linkTo({translation:'GAE',book:data.get('book'),chapter:Number(data.get('chapter')),verse:null});});
+  function chapters() { const book=getBook(document.querySelector('#book-choice').value);document.querySelector('#chapter-choice').innerHTML='<option value="">책 처음부터</option>'+Array.from({length:book.chapters},(_,i)=>`<option value="${i+1}">${i+1}장</option>`).join(''); }
+  chapters();document.querySelector('#book-choice').addEventListener('change',chapters);
+  document.querySelector('#chapter-form').addEventListener('submit',event=>{
+    event.preventDefault();const data=new FormData(event.currentTarget);
+    dialog.close();location={translation:'GAE',book:data.get('book'),chapter:Number(data.get('chapter')||1),verse:null};activeVerse=null;mobileOpen=false;
+    window.history.pushState(null,'',linkTo(location));renderReader();updateHeader();document.querySelector('.book-title').focus({preventScroll:true});scrollToReadingLocation();rememberReading();
+    if(data.get('chapter')&&!getChapter(location.book,location.chapter).available)toast(`${location.chapter}장의 본문은 아직 연결되지 않았습니다.`);
+  });
   dialog.showModal();
 }
 function settingsDialog() {
@@ -173,7 +191,7 @@ function settingsDialog() {
 document.addEventListener('click',event=>{
   const close=event.target.closest('[data-close-dialog]');if(close){close.closest('dialog').close();return;}
   const settingsButton=event.target.closest('.settings-trigger');if(settingsButton){settingsDialog();return;}
-  const verseButton=event.target.closest('[data-verse]');if(verseButton){activeVerse=Number(verseButton.dataset.verse);location={...location,verse:activeVerse};mobileOpen=window.matchMedia('(max-width:1023px)').matches;if(mobileOpen)window.history.pushState({biblejeongContext:true},'',linkTo(location));else window.history.replaceState(null,'',linkTo(location));rememberReading();renderReader();updateHeader();if(mobileOpen)document.querySelector('#context-title')?.focus({preventScroll:true});else document.querySelector(`[data-verse="${activeVerse}"]`)?.focus({preventScroll:true});return;}
+  const verseButton=event.target.closest('[data-verse]');if(verseButton){activeVerse=Number(verseButton.dataset.verse);location={...location,chapter:Number(verseButton.dataset.chapter),verse:activeVerse};mobileOpen=window.matchMedia('(max-width:1023px)').matches;if(mobileOpen)window.history.pushState({biblejeongContext:true},'',linkTo(location));else window.history.replaceState(null,'',linkTo(location));rememberReading();renderReader();updateHeader();if(mobileOpen)document.querySelector('#context-title')?.focus({preventScroll:true});else focusSelectedVerse();return;}
   const edit=event.target.closest('[data-edit]');if(edit){openEditor(edit.dataset.edit);return;}
   const remove=event.target.closest('[data-remove]');if(remove){const row=saved.find(r=>key(r)===remove.dataset.remove);if(row)removeRow(row);return;}
   const sorting=event.target.closest('[data-sort]');if(sorting){if(!discardDraft())return;sort=sorting.dataset.sort;renderMyPage();return;}
@@ -208,7 +226,7 @@ window.addEventListener('storage',event=>{
 });
 function closeContext(){
   if(window.history.state?.biblejeongContext){window.history.back();return;}
-  mobileOpen=false;renderReader();document.querySelector(`[data-verse="${activeVerse}"]`)?.focus({preventScroll:true});
+  mobileOpen=false;renderReader();scrollToReadingLocation();focusSelectedVerse();
 }
 window.addEventListener('popstate',()=>{
   if(isMyPage)return;
@@ -216,13 +234,13 @@ window.addEventListener('popstate',()=>{
   mobileOpen=window.history.state?.biblejeongContext===true;
   try{
     location=parseReadingLocation(window.location.search);activeVerse=location.verse;addressError=null;
-    if(wasOpen&&!mobileOpen&&previous.book===location.book&&previous.chapter===location.chapter&&getVerse(previous)){
-      location={...location,verse:previous.verse};activeVerse=previous.verse;window.history.replaceState(null,'',linkTo(location));
+    if(wasOpen&&!mobileOpen&&previous.book===location.book&&getVerse(previous)){
+      location={...previous};activeVerse=previous.verse;window.history.replaceState(null,'',linkTo(location));
     }
   }catch(error){addressError=error;}
   renderReader();updateHeader();
   if(mobileOpen)document.querySelector('#context-title')?.focus({preventScroll:true});
-  else document.querySelector(`[data-verse="${activeVerse}"]`)?.focus({preventScroll:true});
+  else {if(!wasOpen||previous.book!==location.book)scrollToReadingLocation();focusSelectedVerse();}
 });
 window.matchMedia('(max-width:1023px)').addEventListener('change',()=>{if(!isMyPage)renderReader();});
 document.addEventListener('keydown',event=>{
@@ -237,6 +255,9 @@ document.addEventListener('keydown',event=>{
 render();
 if(!isMyPage&&!addressError){
   const previous=lastReading();
-  if(previous.url===new URL(linkTo(location),window.location.href).href&&previous.scroll){requestAnimationFrame(()=>{const col=document.querySelector('.scripture-column');if(window.matchMedia('(min-width:1024px)').matches)col.scrollTop=previous.scroll;else window.scrollTo(0,previous.scroll);});}
+  requestAnimationFrame(()=>{
+    if(previous.url===new URL(linkTo(location),window.location.href).href&&previous.scroll){const col=document.querySelector('.scripture-column');if(window.matchMedia('(min-width:1024px)').matches)col.scrollTop=previous.scroll;else window.scrollTo(0,previous.scroll);}
+    else scrollToReadingLocation();
+  });
   if(mobileOpen)document.querySelector('#context-title')?.focus({preventScroll:true});
 }
