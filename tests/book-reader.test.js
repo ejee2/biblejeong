@@ -30,3 +30,25 @@ test('a saved verse marks only the matching book chapter and verse and text stay
   assert.doesNotMatch(escaped,/<script>/);
   assert.match(escaped,/&lt;script&gt;test&lt;\/script&gt; &amp; &quot;본문&quot;/);
 });
+
+test('remote chapters keep inline loading and retry states without pretending text is available', async () => {
+  const { bookChaptersMarkup } = await import('../assets/book-reader.js');
+  const html = bookChaptersMarkup('gen',chapters,{chapter:1,verse:null},[],{
+    remote:true,statusFor:chapter=>chapter===3?{state:'error',message:'잠시 후 다시 시도해 주세요.'}:{state:'loaded'},
+  });
+  assert.match(html,/id="chapter-3"/);
+  assert.match(html,/잠시 후 다시 시도해 주세요\./);
+  assert.match(html,/data-retry-chapter="3"/);
+  const idle = bookChaptersMarkup('gen',[chapters[2]],{},[],{remote:true,statusFor:()=>({state:'idle'})});
+  assert.match(idle,/data-load-chapter="3"/);
+  assert.match(idle,/본문 불러오기/);
+});
+
+test('combined verse ranges remain one selectable row with a complete range label', async () => {
+  const { bookChaptersMarkup } = await import('../assets/book-reader.js');
+  const html=bookChaptersMarkup('gen',[{chapter:1,available:true,partial:false,verses:[{verse:1,endVerse:2,text:'합절 테스트 문장'}]}],{chapter:1,verse:2},[{translation:'GAE',book:'gen',chapter:1,verse:2}]);
+  assert.match(html,/data-end-verse="2"/);
+  assert.match(html,/1–2절/);
+  assert.match(html,/class="verse is-saved is-current"/);
+  assert.equal((html.match(/data-verse=/g)||[]).length,1);
+});
