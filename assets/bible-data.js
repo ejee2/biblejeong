@@ -27,6 +27,8 @@ const excerpt = Object.freeze([
   Object.freeze({ verse: 19, text: '성령을 소멸하지 말며' }),
   Object.freeze({ verse: 20, text: '예언을 멸시하지 말고' }),
 ]);
+const registeredChapters = new Map();
+const chapterKey = (book, chapter) => `${book}:${chapter}`;
 
 export function getBook(id) {
   return BOOKS.find((book) => book.id === id) ?? null;
@@ -41,8 +43,8 @@ export function normalizeLocation(location, { requireVerse = false } = {}) {
   if (translation !== TRANSLATION || !book || !Number.isInteger(chapter) || chapter < 1 || chapter > book.chapters) {
     throw new TypeError('성경 주소의 번역·책·장을 확인해 주세요.');
   }
-  // shortcut: 미등록 장은 장 경계와 최대 절수만 검증하며, 본문 도입 때 각 장의 절수도 등록한다.
-  const maximumVerse = book.id === '1th' && chapter === 5 ? 28 : 176;
+  // shortcut: 아직 읽지 않은 장은 전체 성경의 최대 절수로 주소를 검증한다.
+  const maximumVerse = registeredChapters.get(chapterKey(book.id, chapter))?.totalVerses ?? (book.id === '1th' && chapter === 5 ? 28 : 176);
   if ((requireVerse && verse === null) || (verse !== null && (!Number.isInteger(verse) || verse < 1 || verse > maximumVerse))) {
     throw new TypeError('성경 주소의 절 번호를 확인해 주세요.');
   }
@@ -58,6 +60,12 @@ export function officialBibleUrl(book, chapter) {
 
 export function getChapter(book, chapter) {
   const location = normalizeLocation({ book, chapter });
+  const registered = registeredChapters.get(chapterKey(location.book, location.chapter));
+  if (registered) return {
+    ...location, available:true, partial:false, source:'logos',
+    verses:registered.verses.map(verse=>({...verse})), excerpt:null,
+    totalVerses:registered.totalVerses, officialUrl:officialBibleUrl(location.book, location.chapter),
+  };
   const available = location.book === '1th' && location.chapter === 5;
   return {
     ...location,
@@ -70,6 +78,21 @@ export function getChapter(book, chapter) {
   };
 }
 
+export function registerChapter(book, chapter, verses) {
+  const location = normalizeLocation({ book, chapter });
+  if (!Array.isArray(verses) || !verses.length || verses.length > 176) throw new TypeError('본문의 절 목록을 확인해 주세요.');
+  let previousEnd = 0;
+  const copied = verses.map(row => {
+    if (!row || typeof row !== 'object' || !Number.isInteger(row.verse) || !Number.isInteger(row.endVerse) || row.verse !== previousEnd + 1 || row.endVerse < row.verse || row.endVerse > 176 || typeof row.text !== 'string' || !row.text.trim()) {
+      throw new TypeError('본문의 절 번호·범위·내용을 확인해 주세요.');
+    }
+    previousEnd = row.endVerse;
+    return { verse:row.verse, endVerse:row.endVerse, text:row.text };
+  });
+  registeredChapters.set(chapterKey(location.book, location.chapter), { verses:copied, totalVerses:previousEnd });
+  return getChapter(location.book, location.chapter);
+}
+
 export function getBookChapters(id) {
   const book = getBook(id);
   if (!book) throw new TypeError('성경의 책을 확인해 주세요.');
@@ -79,8 +102,8 @@ export function getBookChapters(id) {
 export function getVerse(location) {
   const normalized = normalizeLocation(location);
   if (normalized.verse === null) return null;
-  const verse = getChapter(normalized.book, normalized.chapter).verses.find((item) => item.verse === normalized.verse);
-  return verse ? { ...normalized, text: verse.text } : null;
+  const verse = getChapter(normalized.book, normalized.chapter).verses.find((item) => item.verse <= normalized.verse && normalized.verse <= (item.endVerse ?? item.verse));
+  return verse ? { ...normalized, verseStart:verse.verse, endVerse:verse.endVerse ?? verse.verse, text:verse.text } : null;
 }
 
 const contextSections = {
@@ -116,7 +139,7 @@ const contextSections = {
     title: '예언에 관한 권면',
     summary: '20절은 예언을 멸시하지 말 것을 권합니다. 편지 첫머리는 보내는 이들로 바울·실루아노·디모데, 받는 이들로 데살로니가 교회를 적고 있습니다.',
     before: '14–15절의 서로를 돌보라는 권면, 16–18절의 기쁨·기도·감사에 관한 권면 뒤에 19절의 성령에 관한 권면이 나옵니다.',
-    after: '이 화면의 발췌는 20절에서 끝납니다. 이어지는 문맥은 공식 본문에서 확인할 수 있습니다.',
+    after: '20절 이후의 문맥은 공식 본문에서 확인할 수 있습니다.',
     beforeRange: [14, 19], afterRange: [20, 20],
   },
 };
@@ -128,7 +151,7 @@ function reference(chapter, from, to = from) {
 
 export function getContext(location) {
   const verse = getVerse(location);
-  if (!verse || verse.book !== '1th' || verse.chapter !== 5) return null;
+  if (!verse || verse.book !== '1th' || verse.chapter !== 5 || verse.verseStart !== verse.verse || verse.endVerse !== verse.verse) return null;
   const section = contextSections[verse.verse];
   if (!section) return null;
   const first = reference(1, 1);
