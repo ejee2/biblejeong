@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f3ed">
+  <meta name="description" content="표시한 구절과 나의 묵상을 같은 브라우저에 보관하는 공간입니다.">
+  <title>뜻깊은 구절 · 성경 곁에서</title>
+  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/app.css">
+  <script type="module" src="../assets/app.js"></script>
+</head>
+<body data-page="mypage">
+  <a class="skip-link" href="#main">본문으로 건너뛰기</a>
+  <header class="app-header">
+    <a class="brand" data-reading-link href="../">← 읽던 본문</a>
+    <nav aria-label="주 메뉴"><a data-reading-link href="../">성경 읽기</a><a data-mypage-link href="./" aria-current="page">마이페이지</a><button class="text-button settings-trigger" type="button" aria-label="읽기 설정">가</button></nav>
+  </header>
+  <main id="main" tabindex="-1"><p class="initial-loading">표시한 구절을 불러오고 있습니다.</p></main>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="chapter-dialog" aria-labelledby="chapter-dialog-title"></dialog>
+  <dialog id="settings-dialog" aria-labelledby="settings-title"></dialog>
+  <noscript>표시한 구절과 묵상을 사용하려면 JavaScript를 켜 주세요.</noscript>
+</body>
+</html>
