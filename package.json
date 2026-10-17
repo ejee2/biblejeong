@@ -1,0 +1,13 @@
+{
+  "name": "biblejeong",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "성경 곁에서 — 구절의 맥락을 읽고 묵상을 남기는 개인용 읽기 도우미",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "node scripts/serve.mjs",
+    "test": "node --test",
+    "build": "node scripts/build.mjs"
+  }
+}
