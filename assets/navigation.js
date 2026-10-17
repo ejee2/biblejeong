@@ -13,6 +13,16 @@ export function verseElementId(location) {
   return `verse-${book}-${chapter}-${verse}`;
 }
 
+export function verseForRange(location, { chapter, verse, endVerse = verse }, saved = []) {
+  const current = normalizeLocation(location);
+  const target = normalizeLocation({ ...current, chapter, verse }, { requireVerse:true });
+  normalizeLocation({ ...target, verse:endVerse }, { requireVerse:true });
+  if (endVerse < verse) throw new TypeError('성경 구절의 범위를 확인해 주세요.');
+  const includes = value => Number.isInteger(value) && value >= verse && value <= endVerse;
+  if (current.chapter === chapter && includes(current.verse)) return current.verse;
+  return saved.find(row => row.translation === target.translation && row.book === target.book && row.chapter === chapter && includes(row.verse))?.verse ?? verse;
+}
+
 export function adjacentChapter(location, direction) {
   const book = getBook(location.book);
   let chapter = location.chapter + direction;
